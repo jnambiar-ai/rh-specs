@@ -19,6 +19,14 @@ stop on any block and report, secrets only in `.env`).
 - Maxwell is an old collection. It is only the parser's test file. Real targets are current
   collections; `sheet_revision` shows how stale each sheet is.
 
+## Box Drive rules (hard)
+- Never delete, move, rename, edit, copy, share or create anything inside the Box Drive folder.
+- Never run shell commands, editors or file tools with a path inside it. Never open or read file
+  contents there (Box Drive downloads on open) and never touch 3D model files.
+- The ONLY allowed interaction is `python scripts/box_drive_index.py "<box folder>"`, which lists
+  metadata and writes its csv outside Box. Start with one subfolder, then widen.
+- Work from the resulting csv. Deny write/edit permissions for the Box path in local settings.
+
 ## Setup
     python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
     pip install httpx pdfplumber pymupdf pandas pytest
