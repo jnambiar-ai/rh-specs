@@ -32,6 +32,9 @@ stop on any block and report, secrets only in `.env`).
     pip install httpx pdfplumber pymupdf pandas pytest
     python -m pytest -q
 
-## Still needed from the user
-- Their prompt-generation engine (add under `prompt_engine/` or paste it; no secrets).
-- The exact name of the image model they generate with ("chat gpt 2.5" is not a model name we recognize).
+## Downstream use
+- The user generates images with ChatGPT Images 2.5 (OpenAI, announced 2026-09-08; API models
+  GPT-Image-2.5 Flare and Sunburst). They dropped the request to review their prompt-generation
+  engine, so do not ask for it again unless they bring it up.
+- The specs exist to pick reference images and keep scale accurate in prompts. Proposed, pending the
+  user's OK: an extra `prompt_dims` text column per row (e.g. `96" W x 40" D x 34" H; seat 18"; arm 26"`).
