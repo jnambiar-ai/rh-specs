@@ -3,11 +3,13 @@
 // For each WIP file it:
 //   1. opens the PSD (the WIP file itself is never saved or modified)
 //   2. turns off the Shadow group(s)
-//   3. measures the product's bounding box
+//   3. measures the product's bounding box (from the "Main" group; falls back to
+//      the white background if there is no usable Main group)
 //   4. crops / expands the canvas to a 3:2 frame with PADDING around the product
 //   5. flattens, converts to RGB 8-bit, and resizes to LONG_EDGE_PX on the long side
 //   6. saves <name>.jpg to ~/Desktop/RH_ShadowPrep
-// Each crop is also logged to RH_ShadowPrep_log.csv in the output folder, so the
+// The frame is worked out per file from the product's size, so WIPs can be any canvas
+// size. Each crop is logged to RH_ShadowPrep_log.csv in the output folder, so the
 // cast shadow can later be placed back into the WIP at the right scale and position.
 // Save as .jsx, run via File > Scripts > Browse, then pick the WIP files.
 
@@ -25,12 +27,17 @@
     var ASPECT_H = 2;
     var LONG_EDGE_PX = 4000;
 
+    // The group (folder) that holds the product and its mask. Its visible pixels are
+    // used to measure how the product sits in the canvas.
+    var MAIN_GROUP_PATTERN = /^main$/i;
+
     // Any group (folder) whose name matches this is turned off.
     // Default: name contains "shadow", case-insensitive ("Shadow", "SHADOWS", "Cast Shadow"...)
     var SHADOW_GROUP_PATTERN = /shadow/i;
 
-    // When measuring the product, pixels at or above this level (0-255) count as white
-    // background. Lower it if faint haze around the product is throwing the bounds off.
+    // Fallback measurement only (used when there is no usable Main group): pixels at or
+    // above this level (0-255) count as white background. Lower it if faint haze around
+    // the product is throwing the bounds off.
     var WHITE_POINT = 250;
 
     // Where the WIP files are. Leave "" to be asked each run (multi-select),
@@ -101,18 +108,95 @@
         }
     }
 
-    function trimSide(d, top, left, bottom, right) {
-        try {
-            d.trim(TrimType.TOPLEFT, top, left, bottom, right);
-        } catch (e) {
-            // nothing to trim on that side (product touches the edge)
+    // Index path (e.g. [2] or [0, 3]) to the first group matching pattern, top level
+    // first, then nested groups. Returns null if there is none.
+    function findGroupPath(container, pattern) {
+        var i, lyr, sub;
+        for (i = 0; i < container.layers.length; i++) {
+            lyr = container.layers[i];
+            if (lyr.typename === "LayerSet" && pattern.test(lyr.name)) {
+                return [i];
+            }
+        }
+        for (i = 0; i < container.layers.length; i++) {
+            lyr = container.layers[i];
+            if (lyr.typename === "LayerSet") {
+                sub = findGroupPath(lyr, pattern);
+                if (sub) {
+                    return [i].concat(sub);
+                }
+            }
+        }
+        return null;
+    }
+
+    // Turns off everything except the group at `path` (and the groups that contain it)
+    function isolateGroup(container, path, depth) {
+        for (var i = 0; i < container.layers.length; i++) {
+            var lyr = container.layers[i];
+            if (i !== path[depth]) {
+                lyr.visible = false;
+            } else {
+                lyr.visible = true;
+                if (depth < path.length - 1) {
+                    isolateGroup(lyr, path, depth + 1);
+                }
+            }
         }
     }
 
-    // Product bounding box in document pixels, measured on a flattened copy with
-    // the shadow already turned off. The original document is left untouched.
-    function measureProduct(doc) {
-        var probe = doc.duplicate("RH_probe");
+    function trimSide(d, type, top, left, bottom, right) {
+        try {
+            d.trim(type, top, left, bottom, right);
+        } catch (e) {
+            // nothing to trim on that side (content touches the edge, or is empty)
+        }
+    }
+
+    // Trims one side at a time so the size change on each side gives its offset.
+    // Returns the content's bounding box in the document's pixels.
+    function trimBounds(d, type) {
+        var w0 = d.width.as("px");
+        var h0 = d.height.as("px");
+        trimSide(d, type, true, false, false, false);
+        var h1 = d.height.as("px");
+        trimSide(d, type, false, false, true, false);
+        var h2 = d.height.as("px");
+        trimSide(d, type, false, true, false, false);
+        var w1 = d.width.as("px");
+        trimSide(d, type, false, false, false, true);
+        var w2 = d.width.as("px");
+        return {
+            left: w0 - w1,
+            top: h0 - h1,
+            right: w0 - (w1 - w2),
+            bottom: h0 - (h1 - h2),
+            trimmedAnything: (w2 < w0 || h2 < h0)
+        };
+    }
+
+    // Bounding box of the Main group's visible pixels (masks applied), measured on a
+    // copy where everything else is turned off. Returns null if there is no Main group.
+    function measureFromMain(doc) {
+        var path = findGroupPath(doc, MAIN_GROUP_PATTERN);
+        if (!path) {
+            return null;
+        }
+        var probe = doc.duplicate("RH_probe_main");
+        try {
+            app.activeDocument = probe;
+            isolateGroup(probe, path, 0);
+            probe.mergeVisibleLayers();
+            return trimBounds(probe, TrimType.TRANSPARENT);
+        } finally {
+            probe.close(SaveOptions.DONOTSAVECHANGES);
+            app.activeDocument = doc;
+        }
+    }
+
+    // Fallback: bounding box of everything that isn't white, on a flattened copy
+    function measureFromWhite(doc) {
+        var probe = doc.duplicate("RH_probe_white");
         try {
             app.activeDocument = probe;
             probe.flatten();
@@ -124,30 +208,35 @@
             }
             // Snap near-white to pure white so Trim ignores faint haze and noise
             probe.activeLayer.adjustLevels(0, WHITE_POINT, 1.0, 0, 255);
-
-            // Trim one side at a time so the size change on each side gives its offset
-            var w0 = probe.width.as("px");
-            var h0 = probe.height.as("px");
-            trimSide(probe, true, false, false, false);
-            var h1 = probe.height.as("px");
-            trimSide(probe, false, false, true, false);
-            var h2 = probe.height.as("px");
-            trimSide(probe, false, true, false, false);
-            var w1 = probe.width.as("px");
-            trimSide(probe, false, false, false, true);
-            var w2 = probe.width.as("px");
-
-            return {
-                left: w0 - w1,
-                top: h0 - h1,
-                right: w0 - (w1 - w2),
-                bottom: h0 - (h1 - h2),
-                trimmedAnything: (w2 < w0 || h2 < h0)
-            };
+            return trimBounds(probe, TrimType.TOPLEFT);
         } finally {
             probe.close(SaveOptions.DONOTSAVECHANGES);
             app.activeDocument = doc;
         }
+    }
+
+    // Product bounding box in document pixels, with the shadow already turned off.
+    // Prefers the Main group; falls back to the white background and adds a note.
+    // The original document is left untouched.
+    function measureProduct(doc, notes) {
+        var why;
+        try {
+            var viaMain = measureFromMain(doc);
+            if (viaMain === null) {
+                why = "no Main group";
+            } else if (!viaMain.trimmedAnything) {
+                why = "Main group has no empty margin";
+            } else {
+                viaMain.source = "Main";
+                return viaMain;
+            }
+        } catch (e) {
+            why = "Main measure failed: " + e.message;
+        }
+        notes.push(why + " - used white-trim");
+        var viaWhite = measureFromWhite(doc);
+        viaWhite.source = "white-trim";
+        return viaWhite;
     }
 
     // 3:2 frame (in source-document pixels, may extend past the canvas) that puts
@@ -179,11 +268,12 @@
         logFile.encoding = "UTF-8";
         logFile.open("a");
         if (isNew) {
-            logFile.writeln("file,status,srcW,srcH,cropLeft,cropTop,cropW,cropH,outW,outH,hiddenGroups");
+            logFile.writeln("file,status,srcW,srcH,cropLeft,cropTop,cropW,cropH,outW,outH,hiddenGroups,boundsSource");
         }
         logFile.writeln([
             csvQuote(r.file), csvQuote(r.status), r.srcW, r.srcH,
-            r.cropLeft, r.cropTop, r.cropW, r.cropH, r.outW, r.outH, csvQuote(r.hidden)
+            r.cropLeft, r.cropTop, r.cropW, r.cropH, r.outW, r.outH,
+            csvQuote(r.hidden), csvQuote(r.source)
         ].join(","));
         logFile.close();
     }
@@ -193,7 +283,7 @@
         var base = fileName.replace(/\.[^\.]+$/, "");
         var r = {
             file: fileName, status: "ok", srcW: "", srcH: "", cropLeft: "", cropTop: "",
-            cropW: "", cropH: "", outW: "", outH: "", hidden: ""
+            cropW: "", cropH: "", outW: "", outH: "", hidden: "", source: ""
         };
         var notes = [];
         var doc = null;
@@ -217,9 +307,10 @@
             }
 
             // 2. Find the product and work out the 3:2 padded frame
-            var bounds = measureProduct(doc);
+            var bounds = measureProduct(doc, notes);
+            r.source = bounds.source;
             if (!bounds.trimmedAnything) {
-                notes.push("no white margin found, bounds = full canvas");
+                notes.push("no margin found - bounds = full canvas");
             }
             var frame = computeFrame(bounds);
             r.cropLeft = frame.left;
