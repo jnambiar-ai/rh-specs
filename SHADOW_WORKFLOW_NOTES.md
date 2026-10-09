@@ -32,7 +32,10 @@ Hide Shadow group(s) -> measure product from Main (fallback: non-white bounds) -
 
 - Image Iterator -> Depth Anything V2 -> Nano Banana Pro edit (`fal-ai/nano-banana-pro/edit`).
 - Nano inputs: image_1 product, image_2 depth map, image_3 shadow-style reference (one fixed image for the whole batch) + prompt. Settings: 4K, aspect 3:2, PNG, random seed. Output: **5056x3392**.
-- **Resize node: 5056 x 3388**, aspect lock off. Same ratio as the earlier 3980x2667 setting, kept deliberately: Nano's 3:2 frame is 1.4906:1 while the input is 1.4998:1, so a straight resize to the input size would stretch ~0.6% sideways. 5056x3388 is 1.27035x of 3980x2667; to register with the 4000x2667 prep frame, scale by 0.7872 and center (about 10px margin each side).
+- **Resize node** (aspect lock off). The width correction (Nano's frame is 1.4906:1, the prep frame is 1.4998:1) must live in **one** place only:
+  - **Photoshop (recommended):** the 99% width step below. Resize node is then neutral: **5056 x 3371** (the prep frame's ratio, -21px height, width unchanged), or skip the node and keep 5056 x 3392 if the placement forces exact frame dimensions.
+  - **Weave (alternative):** bake the 99% in with **5036 x 3392** (-20px width, height unchanged) and do no 99% in Photoshop; place by fitting to frame height.
+  - Superseded: 5056 x 3388 (= 3980 x 2667 ratio, 99.5%). It only applied if the correction lived in Weave.
 - Outputs carry no original filename (random IDs). Order is preserved: each result's `secondaryOrder` matches the iterator's `insertionOrder`. A rename step must map by order (the workflow JSON lists the ordered originals).
 - Prompt: the `--no ...` list is Midjourney syntax and Gemini likely reads it as plain text; consider positive phrasing. The style reference is the same product as batch item 1, so item 1 is not a fair style test.
 
@@ -46,8 +49,8 @@ Hide Shadow group(s) -> measure product from Main (fallback: non-white bounds) -
 
 Notes for automating:
 
-- The 99% width step is probably the same correction as the Resize node's 3980/4000 (99.5%). Do not apply both: check on one file.
-- These steps were done with the AI output fitted to the full WIP canvas. The prep script crops, pads and resizes, so placement has to use the CSV: the 4000x2667 prep frame covers WIP pixels `cropLeft, cropTop, cropW x cropH`. Scale the (resized) AI image by `cropW / 4000` and center it in that rectangle.
+- The 99% width step corrects the same thing as a Resize-node width change (the model's frame is ~0.6% narrower than 3:2; theory says ~99.4%, the tuned value is 99%). Apply it once only, in Photoshop (see Resize node above). Because the prep frame is always the same 3:2 ratio, the correction is the same for every file, so it can be a constant. Verify on one file.
+- These steps were done with the AI output fitted to the full WIP canvas. The prep script crops, pads and resizes, so placement has to use the CSV: the 4000x2667 prep frame covers WIP pixels `cropLeft, cropTop, cropW x cropH`. Stretch the AI image to that rectangle (cropW x cropH), then apply the 99% width about its center.
 - Canvas expansion should come from where the shadow lands, not a fixed 200px.
 - Unconfirmed: the unit of the 1px nudge (WIP pixels or prep-frame pixels).
 
